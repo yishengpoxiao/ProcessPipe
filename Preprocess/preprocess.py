@@ -33,6 +33,32 @@ def has_enough_shell(bvals, min_shell=6, threshold=50):
 def safe_rmtree(path):
     if path.exists():
         shutil.rmtree(path)
+        
+        
+def safe_unlink(path):
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def join_ids(sub_id: str, ses_id: str, *parts: str) -> str:
+    components = [sub_id]
+    if ses_id:
+        components.append(ses_id)
+    components.extend(part for part in parts if part)
+    return "_".join(components)
+
+
+def cleanup_transform_products(transform_dir: Path, sub_id: str, ses_id: str):
+    dwi_mni_stem = join_ids(sub_id, ses_id, "dwi_MNI")
+    mask_mni_file = transform_dir / f"{join_ids(sub_id, ses_id, 'brain_mask_MNI')}.nii.gz"
+    dwi_mni_file = transform_dir / f"{dwi_mni_stem}.nii.gz"
+    dwi_mni_bval = transform_dir / f"{dwi_mni_stem}.bval"
+    dwi_mni_bvec = transform_dir / f"{dwi_mni_stem}.bvec"
+
+    for path in (mask_mni_file, dwi_mni_file, dwi_mni_bval, dwi_mni_bvec):
+        safe_unlink(path)
 
 
 def log_error(log_path, message):
@@ -152,6 +178,42 @@ def sort_files(file_list):
     return sorted(file_list, key=read_bvals_count, reverse=True)
 
 
+DEFAULT_SESSION_ID = ""
+
+
+def iter_session_dwi_dirs(sub_dir: Path):
+    """
+    Yield tuples of (session_id, dwi_directory) for a subject directory.
+
+    The function first looks for session-level directories that contain a ``dwi``
+    folder (e.g. ``sub-01/ses-01/dwi``).  When no such directory is found, a
+    fallback to ``sub-01/dwi`` is used so that datasets without an explicit
+    session hierarchy are still processed.
+    """
+
+    session_dirs = []
+    try:
+        children = list(sub_dir.iterdir())
+    except OSError:
+        return []
+
+    for child in children:
+        if not child.is_dir():
+            continue
+        dwi_dir = child / "dwi"
+        if dwi_dir.is_dir():
+            session_dirs.append((child.name, dwi_dir))
+
+    if session_dirs:
+        return session_dirs
+
+    fallback_dwi = sub_dir / "dwi"
+    if fallback_dwi.is_dir():
+        return [(DEFAULT_SESSION_ID, fallback_dwi)]
+
+    return []
+
+
 args = argparse.ArgumentParser()
 args.add_argument("-i", "--input_dir", dest="input_dir", required=True, help="Input directory containing subject data")
 args = args.parse_args()
@@ -164,14 +226,7 @@ sub_dirs = [d for d in root_dir.iterdir() if d.is_dir()]
 def process_subjects(sub_dir):
     sub_id = sub_dir.name
 
-    for ses_dir in sub_dir.iterdir():
-        if not ses_dir.is_dir():
-            continue
-        
-        ses_id = ses_dir.name
-        dwi_dir = ses_dir / 'dwi'
-        if not dwi_dir.exists():
-            continue
+    for ses_id, dwi_dir in iter_session_dwi_dirs(sub_dir):
         
         nifti_files = sorted(dwi_dir.glob('*.nii.gz'))
         if not nifti_files:
@@ -181,10 +236,17 @@ def process_subjects(sub_dir):
         processed_dir = dwi_dir / 'processed'
         transform_dir = dwi_dir / 'transform'
         gqi_dir = dwi_dir / 'gqi'
-        gqi_file = gqi_dir / f"{sub_id}_{ses_id}_dwi.gqi.fz"
+        dwi_stem = join_ids(sub_id, ses_id, "dwi")
+        gqi_file = gqi_dir / f"{dwi_stem}.gqi.fz"
         
         if gqi_file.exists():
+            cleanup_transform_products(transform_dir, sub_id, ses_id)
             continue
+        
+        session_prefix = join_ids(sub_id, ses_id)
+        processed_stem = join_ids(sub_id, ses_id, "dwi_processed")
+        brain_mask_stem = join_ids(sub_id, ses_id, "dwi_processed_bse-multi_BrainMask")
+        dwi_mni_stem = join_ids(sub_id, ses_id, "dwi_MNI")
 
         for path in (dsi_process_dir, processed_dir, transform_dir, gqi_dir):
             path.mkdir(parents=True, exist_ok=True)
@@ -263,8 +325,8 @@ def process_subjects(sub_dir):
 
             src = str(pd_files[0])
             others = [str(p) for p in pd_files[1:]]
-            
-            sz_file = dsi_process_dir / f"{sub_id}_{ses_id}_dwi.sz"
+
+            sz_file = dsi_process_dir / f"{dwi_stem}.sz"
             if not sz_file.exists():
                 cmd = [
                     str(DSI_STUDIO_BIN),
@@ -278,8 +340,8 @@ def process_subjects(sub_dir):
                     log_error(error_log, f"dsi-studio src failed in {dwi_dir}")
                     cleanup_failure()
                     continue
-                
-            preprocessed_file = processed_dir / f"{sub_id}_{ses_id}_dwi_processed.nii.gz"
+
+            preprocessed_file = processed_dir / f"{processed_stem}.nii.gz"
             preprocessed_src = preprocessed_file.with_suffix('').with_suffix('.sz')
             if not preprocessed_file.exists():
                 rec_commands = [
@@ -305,7 +367,7 @@ def process_subjects(sub_dir):
             rev_files = sort_files(phase_files_dict[rev_pd])
             
             main_src = main_files[0]
-            main_sz_file = dsi_process_dir / f"{sub_id}_{ses_id}_dwi_main_phase_dir.sz"
+            main_sz_file = dsi_process_dir / f"{join_ids(sub_id, ses_id, 'dwi_main_phase_dir')}.sz"
             main_others = [str(p) for p in main_files[1:]]
             if not main_sz_file.exists():
                 cmd = [
@@ -322,7 +384,7 @@ def process_subjects(sub_dir):
                     continue
 
             rev_src = rev_files[0]
-            rev_sz_file = dsi_process_dir / f"{sub_id}_{ses_id}_dwi_rev_phase_dir.sz"
+            rev_sz_file = dsi_process_dir / f"{join_ids(sub_id, ses_id, 'dwi_rev_phase_dir')}.sz"
             rev_others = [str(p) for p in rev_files[1:]]
             if not rev_sz_file.exists():
                 cmd = [
@@ -338,7 +400,7 @@ def process_subjects(sub_dir):
                     cleanup_failure()
                     continue
 
-            preprocessed_file = processed_dir / f"{sub_id}_{ses_id}_dwi_processed.nii.gz"
+            preprocessed_file = processed_dir / f"{processed_stem}.nii.gz"
             preprocessed_src = preprocessed_file.with_suffix("").with_suffix(".sz")
             if not preprocessed_file.exists():
                 rec_commands = [
@@ -356,7 +418,7 @@ def process_subjects(sub_dir):
                     cleanup_failure()
                     continue
 
-        preprocessed_nifti_file = processed_dir / f"{sub_id}_{ses_id}_dwi_processed.nii.gz"
+        preprocessed_nifti_file = processed_dir / f"{processed_stem}.nii.gz"
         if not preprocessed_nifti_file.exists():
             log_error(error_log, f"preprocessed nifti not found in {dwi_dir}")
             cleanup_failure()
@@ -386,11 +448,11 @@ def process_subjects(sub_dir):
             cleanup_failure()
             continue
             
-        txt_file = processed_dir / f"{sub_id}_{ses_id}.txt"
+        txt_file = processed_dir / f"{session_prefix}.txt"
         with open(txt_file, "w") as f:
             f.write(f"{preprocessed_nifti_file}\n")
 
-        brain_mask_file = processed_dir / f"{sub_id}_{ses_id}_dwi_processed_bse-multi_BrainMask.nii.gz"
+        brain_mask_file = processed_dir / f"{brain_mask_stem}.nii.gz"
         if not brain_mask_file.exists():
             cmd = [
                 str(DMRISEG_ENV),
@@ -453,7 +515,7 @@ def process_subjects(sub_dir):
                 cleanup_failure()
                 continue         
             
-        dwi_nifti_in_mni = transform_dir / f"{sub_id}_{ses_id}_dwi_MNI.nii.gz"
+        dwi_nifti_in_mni = transform_dir / f"{dwi_mni_stem}.nii.gz"
         if not dwi_nifti_in_mni.exists():
             cmd = [
                 "antsApplyTransforms",
@@ -470,11 +532,11 @@ def process_subjects(sub_dir):
                 cleanup_failure()
                 continue
             
-        dwi_bval_in_mni = dwi_nifti_in_mni.with_suffix("").with_suffix(".bval")
+        dwi_bval_in_mni = transform_dir / f"{dwi_mni_stem}.bval"
         if not dwi_bval_in_mni.exists():
             shutil.copy(preprocessed_bval_file, dwi_bval_in_mni)
         
-        dwi_bvec_in_mni = dwi_nifti_in_mni.with_suffix("").with_suffix(".bvec")
+        dwi_bvec_in_mni = transform_dir / f"{dwi_mni_stem}.bvec"
         if not dwi_bvec_in_mni.exists():
             try:
                 rotate_bvecs(str(preprocessed_bvec_file), str(affine_mat_file), str(dwi_bvec_in_mni))
@@ -483,7 +545,7 @@ def process_subjects(sub_dir):
                 cleanup_failure()
                 continue
         
-        mask_in_mni = transform_dir / f"{sub_id}_{ses_id}_brain_mask_MNI.nii.gz"
+        mask_in_mni = transform_dir / f"{join_ids(sub_id, ses_id, 'brain_mask_MNI')}.nii.gz"
         if not mask_in_mni.exists():
             cmd = [
                 "antsApplyTransforms",
@@ -499,7 +561,7 @@ def process_subjects(sub_dir):
                 cleanup_failure()
                 continue
             
-        gqi_prefix = gqi_dir / f"{sub_id}_{ses_id}_dwi"
+        gqi_prefix = gqi_dir / dwi_stem
         if not gqi_file.exists():
             cmd = [
                 str(DSI_STUDIO_BIN),
@@ -515,6 +577,8 @@ def process_subjects(sub_dir):
                 log_error(error_log, f"GQI reconstruction failed in {dwi_dir}")
                 cleanup_failure()
                 continue
+            
+        cleanup_transform_products(transform_dir, sub_id, ses_id)
 
         safe_rmtree(dsi_process_dir)
         for path in (processed_dir, transform_dir, gqi_dir):
