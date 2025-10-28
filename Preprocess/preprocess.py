@@ -306,7 +306,31 @@ def process_subjects(sub_dir):
                     min_pd = pd
             
             phase_files_dict.setdefault(pd, []).append(p)
-            
+        
+        def find_direction(files, tol=50):
+            d_cout = 0
+            for f in files:
+                bval_f = f.with_suffix("").with_suffix(".bval")
+                try:
+                    bvals = load_bvals(bval_f)
+                except ValueError:
+                    log_error(error_log, f"invalid bval file in {dwi_dir}: {bval_p}")
+                    continue
+                
+                d_cout += sum(1 for b in bvals if b > tol)
+            return d_cout
+
+        dir_count = {pd: find_direction(files) for pd, files in phase_files_dict.items()}
+        # 找到方向最多的方向
+        max_dir_pd = max(dir_count, key=lambda k: dir_count[k])
+        if dir_count[max_dir_pd] < 6:
+            log_error(error_log, f"not enough b-shell image in {dwi_dir}")
+            cleanup_failure()
+            continue
+        
+        if min_pd != max_dir_pd:
+            min_pd = max_dir_pd
+        
         if 'main' in phase_files_dict:
             min_pd = 'main'
         
@@ -320,6 +344,7 @@ def process_subjects(sub_dir):
             continue
         
         if len(phase_files_dict) == 1:
+            
             pd = next(iter(phase_files_dict))
             pd_files = sort_files(phase_files_dict[pd])
 
