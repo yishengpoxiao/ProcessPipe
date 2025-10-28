@@ -321,13 +321,18 @@ def process_subjects(sub_dir):
             return d_cout
 
         dir_count = {pd: find_direction(files) for pd, files in phase_files_dict.items()}
-        # 找到方向最多的方向
-        max_dir_pd = max(dir_count, key=lambda k: dir_count[k])
-        if dir_count[max_dir_pd] < 6:
-            log_error(error_log, f"not enough b-shell image in {dwi_dir}")
+        
+        if not dir_count:
             cleanup_failure()
             continue
+        else:
+            max_dir_pd = max(dir_count, key=lambda k: dir_count[k])
+            if dir_count[max_dir_pd] < 6:
+                log_error(error_log, f"not enough b-shell image in {dwi_dir}")
+                cleanup_failure()
+                continue
         
+        print(dwi_dir)
         if min_pd != max_dir_pd:
             min_pd = max_dir_pd
         
@@ -340,8 +345,11 @@ def process_subjects(sub_dir):
         
         if len(phase_files_dict) > 2:
             log_error(error_log, f"more than 2 phase encoding directions in {dwi_dir}")
-            cleanup_failure()
-            continue
+            # 保留min_pd和min_pd倒置，另一个删除
+            phase_keys = list(phase_files_dict.keys())
+            for pk in phase_keys:
+                if pk != min_pd and pk != min_pd[::-1]:
+                    del phase_files_dict[pk]
         
         if len(phase_files_dict) == 1:
             
