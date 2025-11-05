@@ -56,8 +56,10 @@ def cleanup_transform_products(transform_dir: Path, sub_id: str, ses_id: str):
     dwi_mni_file = transform_dir / f"{dwi_mni_stem}.nii.gz"
     dwi_mni_bval = transform_dir / f"{dwi_mni_stem}.bval"
     dwi_mni_bvec = transform_dir / f"{dwi_mni_stem}.bvec"
+    fa_warped_file = transform_dir / "FA_2_MNIWarped.nii.gz"
+    fa_inverse_warped_file = transform_dir / "FA_2_MNIInverseWarped.nii.gz"
 
-    for path in (mask_mni_file, dwi_mni_file, dwi_mni_bval, dwi_mni_bvec):
+    for path in (mask_mni_file, dwi_mni_file, dwi_mni_bval, dwi_mni_bvec, fa_warped_file, fa_inverse_warped_file):
         safe_unlink(path)
 
 
@@ -119,6 +121,20 @@ def read_bvecs(this_fname):
         with open(tmp_fname, 'w') as f:
             f.write(re.sub(r'(\t|,)', ' ', content))
         return np.squeeze(np.loadtxt(tmp_fname)).T
+    
+
+def new_bvecs(this_fname):
+    bvecs = read_bvecs(this_fname)
+    if bvecs.shape[0] == 3:
+        bvecs = np.array(bvecs)
+    else:        
+        bvecs = np.array(bvecs).T  # change shape from [nr_vecs, 3] to [3, nr_vecs]
+        
+    bvecs_norm = np.linalg.norm(bvecs, axis=0)
+    idx = bvecs_norm != 0
+    bvecs[:, idx] /= bvecs_norm[idx]
+
+    np.savetxt(this_fname, bvecs, fmt='%1.6f')
 
 
 def rotate_bvecs(bvecs_in, affine_in, bvecs_out):
@@ -215,12 +231,16 @@ def iter_session_dwi_dirs(sub_dir: Path):
 
 
 args = argparse.ArgumentParser()
-args.add_argument("-i", "--input_dir", dest="input_dir", required=True, help="Input directory containing subject data")
+# input_dir累加列表
+args.add_argument("-i", "--input_dir", dest="input_dir", type=str, action="append", required=True, help="Input directory containing subject folders.")
 args = args.parse_args()
 
-root_dir = Path(args.input_dir).resolve()
-error_log = root_dir / "error_log.txt"
-sub_dirs = [d for d in root_dir.iterdir() if d.is_dir()]
+input_dirs = [Path(p).resolve() for p in args.input_dir]
+error_log = '/data/dataset/dmri_preprocess_error.log'
+sub_dirs = []
+
+for input_dir in input_dirs:
+    sub_dirs.extend([d for d in input_dir.iterdir() if d.is_dir()])
 
 
 def process_subjects(sub_dir):
@@ -451,14 +471,16 @@ def process_subjects(sub_dir):
                     cleanup_failure()
                     continue
 
-        preprocessed_nifti_file = processed_dir / f"{processed_stem}.nii.gz"
-        if not preprocessed_nifti_file.exists():
+        preprocessed_file = processed_dir / f"{processed_stem}.nii.gz"
+        if not preprocessed_file.exists():
             log_error(error_log, f"preprocessed nifti not found in {dwi_dir}")
             cleanup_failure()
             continue
         
-        preprocessed_bval_file = preprocessed_nifti_file.with_suffix("").with_suffix(".bval")
-        preprocessed_bvec_file = preprocessed_nifti_file.with_suffix("").with_suffix(".bvec")
+        preprocessed_src = preprocessed_file.with_suffix("").with_suffix(".sz")
+        
+        preprocessed_bval_file = preprocessed_file.with_suffix("").with_suffix(".bval")
+        preprocessed_bvec_file = preprocessed_file.with_suffix("").with_suffix(".bvec")
         if not preprocessed_bval_file.exists() or not preprocessed_bvec_file.exists():
             log_error(error_log, f"missing bval/bvec for preprocessed nifti in {dwi_dir}")
             cleanup_failure()
@@ -483,7 +505,7 @@ def process_subjects(sub_dir):
             
         txt_file = processed_dir / f"{session_prefix}.txt"
         with open(txt_file, "w") as f:
-            f.write(f"{preprocessed_nifti_file}\n")
+            f.write(f"{preprocessed_file}\n")
 
         brain_mask_file = processed_dir / f"{brain_mask_stem}.nii.gz"
         if not brain_mask_file.exists():
@@ -500,6 +522,35 @@ def process_subjects(sub_dir):
                 cleanup_failure()
                 continue
             
+        def rm_mask_tmp_files(process_dir):
+            process_dir = Path(process_dir)
+            tmp_files = list(process_dir.glob(f"*binary_s")) + list(process_dir.glob(f"*binary_c")) + list(process_dir.glob(f"*binary_a"))
+            for tf in tmp_files:
+                safe_unlink(tf)
+        
+        rm_mask_tmp_files(processed_dir)
+        
+        # grad check
+        new_bvecs(preprocessed_bvec_file)
+        cmd = ['dwigradcheck', str(preprocessed_file), '-mask', str(brain_mask_file), '-fslgrad', str(preprocessed_bvec_file), str(preprocessed_bval_file), '-export_grad_fsl', str(preprocessed_bvec_file), str(preprocessed_bval_file), '-quiet', '-force']
+        if not run_subprocess(cmd):
+            log_error(error_log, f"dwigradcheck failed in {dwi_dir}")
+            cleanup_failure()
+            continue
+        
+        # generate new sz file after grad check
+        cmd = [
+                str(DSI_STUDIO_BIN),
+                "--action=src",
+                f"--source={preprocessed_file}",
+                f"--output={preprocessed_src}",
+                "--overwrite=1",
+            ]
+        if not run_subprocess(cmd):
+            log_error(error_log, f"dsi-studio src after grad check failed in {dwi_dir}")
+            cleanup_failure()
+            continue
+            
         dti_dir = processed_dir / "dti"
         dti_dir.mkdir(parents=True, exist_ok=True)
         
@@ -507,7 +558,7 @@ def process_subjects(sub_dir):
         if not fa_path.exists():
             cmd = [
                 "dtifit",
-                "-k", str(preprocessed_nifti_file),
+                "-k", str(preprocessed_file),
                 "-o", str(dti_dir / "dti"),
                 "-m", str(brain_mask_file),
                 "-r", str(preprocessed_bvec_file),
@@ -547,14 +598,14 @@ def process_subjects(sub_dir):
                 log_error(error_log, f"ConvertTransformFile failed in {dwi_dir}")
                 cleanup_failure()
                 continue         
-            
+
         dwi_nifti_in_mni = transform_dir / f"{dwi_mni_stem}.nii.gz"
         if not dwi_nifti_in_mni.exists():
             cmd = [
                 "antsApplyTransforms",
                 "-d", "3",
                 "-e", "3",
-                "-i", str(preprocessed_nifti_file),
+                "-i", str(preprocessed_file),
                 "-r", str(MNI_TEMPLATE),
                 "-o", str(dwi_nifti_in_mni),
                 "-t", str(affine_file),
@@ -614,10 +665,11 @@ def process_subjects(sub_dir):
         cleanup_transform_products(transform_dir, sub_id, ses_id)
 
         safe_rmtree(dsi_process_dir)
+        safe_rmtree(dti_dir)
         for path in (processed_dir, transform_dir, gqi_dir):
             if path.exists() and not any(path.iterdir()):
                 path.rmdir()
 
-tmp = Parallel(n_jobs=8, backend='loky')(
+tmp = Parallel(n_jobs=20, backend='loky')(
     delayed(process_subjects)(sub_dir) for sub_dir in sub_dirs
 )
