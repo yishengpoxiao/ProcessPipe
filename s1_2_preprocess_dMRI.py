@@ -64,7 +64,8 @@ for site in os.listdir(input_dir):
                 dwi_file.replace('.nii.gz', '.bvec'),
                 dwi_file.replace('.nii.gz', '.bval'),
                 "-json_import",
-                dwi_file.replace('.nii.gz', '.json')
+                dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -74,6 +75,7 @@ for site in os.listdir(input_dir):
                 "dwidenoise",
                 mif_file,
                 denoised_mif,
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -85,7 +87,8 @@ for site in os.listdir(input_dir):
                 preprocessed_mif,
                 "-rpe_none",
                 "-pe_dir", "PA",
-                "-eddy_options", " --slm=linear "
+                "-eddy_options", " --slm=linear ",
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -107,7 +110,8 @@ for site in os.listdir(input_dir):
                 PA_dwi_file.replace('.nii.gz', '.bvec'),
                 PA_dwi_file.replace('.nii.gz', '.bval'),
                 "-json_import",
-                PA_dwi_file.replace('.nii.gz', '.json')
+                PA_dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -119,7 +123,8 @@ for site in os.listdir(input_dir):
                 AP_dwi_file.replace('.nii.gz', '.bvec'),
                 AP_dwi_file.replace('.nii.gz', '.bval'),
                 "-json_import",
-                AP_dwi_file.replace('.nii.gz', '.json')
+                AP_dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -129,6 +134,7 @@ for site in os.listdir(input_dir):
                 "dwidenoise",
                 PA_mif_file,
                 denoised_PA_mif,
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             denoised_AP_mif = os.path.join(mrtrix_temp_dir, os.path.basename(AP_dwi_file).replace('.nii.gz', '_den.mif'))
@@ -136,6 +142,7 @@ for site in os.listdir(input_dir):
                 "dwidenoise",
                 AP_mif_file,
                 denoised_AP_mif,
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -146,7 +153,8 @@ for site in os.listdir(input_dir):
                 denoised_PA_mif,
                 denoised_AP_mif,
                 cat_mif,
-                "-axis", "3"
+                "-axis", "3",
+                "-nthreads", "80"
             ]
             subprocess.run(command)
             
@@ -157,7 +165,8 @@ for site in os.listdir(input_dir):
                 cat_mif,
                 preprocessed_mif,
                 "-rpe_header",
-                "-eddy_options", " --slm=linear "
+                "-eddy_options", " --slm=linear ",
+                "-nthreads", "80"
             ]
             subprocess.run(command)
         else:
@@ -169,7 +178,8 @@ for site in os.listdir(input_dir):
             "dwibiascorrect",
             "ants",
             preprocessed_mif,
-            biascorrected_mif
+            biascorrected_mif,
+            "-nthreads", "80"
         ]
         subprocess.run(command)
         
@@ -182,7 +192,8 @@ for site in os.listdir(input_dir):
             biascorrected_mif,
             "-export_grad_fsl",
             os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
-            os.path.join(processed_dir, f"{subject}_dwi_processed.bval")
+            os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
+            "-nthreads", "80"
         ]
         subprocess.run(command)
         
@@ -191,6 +202,7 @@ for site in os.listdir(input_dir):
             "mrconvert",
             biascorrected_mif,
             os.path.join(processed_dir, f"{subject}_dwi_processed.nii.gz"),
+            "-nthreads", "80"
         ]
         subprocess.run(command)
         
