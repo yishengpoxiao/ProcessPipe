@@ -27,7 +27,7 @@ for site in os.listdir(input_dir):
         source $FREESURFER_HOME/SetUpFreeSurfer.sh
         export SUBJECTS_DIR={anat_dir}
         
-        recon-all -i {t1w_file} -s {subject} -all
+        recon-all -i {t1w_file} -s {subject} -all -threads 80
         """
         subprocess.run(command, shell=True, executable='/bin/bash')
         print(f"Finished processing subject {subject} at site {site}.")
