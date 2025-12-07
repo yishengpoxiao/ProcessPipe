@@ -107,6 +107,7 @@ def process_subject(args):
         
         mrtrix_temp_dir = os.path.join(dwi_dir, "mrtrix_temp")
         os.makedirs(mrtrix_temp_dir, exist_ok=True)
+        
         PA_mif_file = os.path.join(mrtrix_temp_dir, os.path.basename(PA_dwi_file).replace('.nii.gz', '.mif'))
         AP_mif_file = os.path.join(mrtrix_temp_dir, os.path.basename(AP_dwi_file).replace('.nii.gz', '.mif'))
         
@@ -145,6 +146,7 @@ def process_subject(args):
             "-nthreads", "80"
         ]
         subprocess.run(command)
+        
         denoised_AP_mif = os.path.join(mrtrix_temp_dir, os.path.basename(AP_dwi_file).replace('.nii.gz', '_den.mif'))
         command = [
             "dwidenoise",
@@ -154,14 +156,12 @@ def process_subject(args):
         ]
         subprocess.run(command)
         
-        # cat files
-        cat_mif = os.path.join(mrtrix_temp_dir, f"{subject}_2pe_dwi.mif")
+        AP_b0_mif = os.path.join(mrtrix_temp_dir, "AP_b0.mif")
         command = [
-            "mrcat",
-            denoised_PA_mif,
+            "dwiextract",
+            "-bzero",
             denoised_AP_mif,
-            cat_mif,
-            "-axis", "3",
+            AP_b0_mif,
             "-nthreads", "80"
         ]
         subprocess.run(command)
@@ -170,10 +170,12 @@ def process_subject(args):
         preprocessed_mif = os.path.join(mrtrix_temp_dir, f"{subject}_dwi_preproc.mif")
         command = [
             "dwifslpreproc",
-            cat_mif,
+            denoised_PA_mif,
             preprocessed_mif,
             "-rpe_header",
+            "-se_epi", AP_b0_mif,
             "-eddy_options", " --slm=linear ",
+            "-align_seepi",
             "-nthreads", "80"
         ]
         subprocess.run(command)
@@ -324,7 +326,7 @@ if __name__ == "__main__":
 
     print(f"[INFO] Total subjects to process: {len(subject_list)}")
 
-    NUM_WORKERS = min(4, cpu_count())
+    NUM_WORKERS = min(8, cpu_count())
 
     with Pool(processes=NUM_WORKERS) as pool:
         pool.map(process_subject, subject_list)
