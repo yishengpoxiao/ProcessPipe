@@ -40,7 +40,7 @@ def process_subject(args):
     subject_path = os.path.join(site_path, subject)
 
     print(f"[INFO] Start processing: site={site}, subject={subject}")
-    
+
     if not os.path.isdir(subject_path):
         print(f"[WARN] Subject path is not dir, skip: {subject_path}")
         return
@@ -51,6 +51,20 @@ def process_subject(args):
         return
 
     dwi_files = glob.glob(os.path.join(dwi_dir, "*_dwi.nii.gz"))
+    
+    for f in dwi_files:
+        command = [
+            'dwigradcheck',
+            f,
+            '-fslgrad',
+            f.replace('.nii.gz', '.bvec'),
+            f.replace('.nii.gz', '.bval'),
+            '-export_grad_fsl',
+            f.replace('.nii.gz', '_gradcheck.bvec'),
+            f.replace('.nii.gz', '_gradcheck.bval'),
+            '-nthreads', '80'
+        ]
+        subprocess.run(command)
 
     # dwidenoise -> dwipreprocess -> bias correction -> gradcheck -> NRRD -> CNN masking -> UKF -> WMA
     if len(dwi_files) == 1:
@@ -66,8 +80,8 @@ def process_subject(args):
             dwi_file,
             mif_file,
             "-fslgrad",
-            dwi_file.replace('.nii.gz', '.bvec'),
-            dwi_file.replace('.nii.gz', '.bval'),
+            dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+            dwi_file.replace('.nii.gz', '_gradcheck.bval'),
             "-json_import",
             dwi_file.replace('.nii.gz', '.json'),
             "-nthreads", "80"
@@ -116,8 +130,8 @@ def process_subject(args):
             PA_dwi_file,
             PA_mif_file,
             "-fslgrad",
-            PA_dwi_file.replace('.nii.gz', '.bvec'),
-            PA_dwi_file.replace('.nii.gz', '.bval'),
+            PA_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+            PA_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
             "-json_import",
             PA_dwi_file.replace('.nii.gz', '.json'),
             "-nthreads", "80"
@@ -129,8 +143,8 @@ def process_subject(args):
             AP_dwi_file,
             AP_mif_file,
             "-fslgrad",
-            AP_dwi_file.replace('.nii.gz', '.bvec'),
-            AP_dwi_file.replace('.nii.gz', '.bval'),
+            AP_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+            AP_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
             "-json_import",
             AP_dwi_file.replace('.nii.gz', '.json'),
             "-nthreads", "80"
@@ -156,12 +170,14 @@ def process_subject(args):
         ]
         subprocess.run(command)
         
-        AP_b0_mif = os.path.join(mrtrix_temp_dir, "AP_b0.mif")
+        # cat files
+        cat_mif = os.path.join(mrtrix_temp_dir, f"{subject}_2pe_dwi.mif")
         command = [
-            "dwiextract",
-            "-bzero",
+            "mrcat",
+            denoised_PA_mif,
             denoised_AP_mif,
-            AP_b0_mif,
+            cat_mif,
+            "-axis", "3",
             "-nthreads", "80"
         ]
         subprocess.run(command)
@@ -170,12 +186,10 @@ def process_subject(args):
         preprocessed_mif = os.path.join(mrtrix_temp_dir, f"{subject}_dwi_preproc.mif")
         command = [
             "dwifslpreproc",
-            denoised_PA_mif,
+            cat_mif,
             preprocessed_mif,
             "-rpe_header",
-            "-se_epi", AP_b0_mif,
             "-eddy_options", " --slm=linear ",
-            "-align_seepi",
             "-nthreads", "80"
         ]
         subprocess.run(command)
@@ -198,23 +212,15 @@ def process_subject(args):
     processed_dir = os.path.join(dwi_dir, "processed")
     os.makedirs(processed_dir, exist_ok=True)
     
-    # grad check
-    command = [
-        "dwigradcheck",
-        biascorrected_mif,
-        "-export_grad_fsl",
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
-        "-nthreads", "80"
-    ]
-    subprocess.run(command)
-    
     # mif -> nifti
     processed_nifti = os.path.join(processed_dir, f"{subject}_dwi_processed.nii.gz")
     command = [
         "mrconvert",
         biascorrected_mif,
         processed_nifti,
+        "-export_grad_fsl",
+        os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
+        os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
         "-nthreads", "80"
     ]
     subprocess.run(command)
@@ -326,7 +332,7 @@ if __name__ == "__main__":
 
     print(f"[INFO] Total subjects to process: {len(subject_list)}")
 
-    NUM_WORKERS = min(8, cpu_count())
+    NUM_WORKERS = min(6, cpu_count())
 
     with Pool(processes=NUM_WORKERS) as pool:
         pool.map(process_subject, subject_list)
