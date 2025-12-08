@@ -88,6 +88,8 @@ def build_rec_cmd(source, output, save_src, corrections):
     return [
         "/data/yijie/software/dsi-studio/dsi_studio",
         "--action=rec",
+        "--volume_correction=1",
+        "--check_btable=1",
         f"--source={source}",
         f'--cmd="{"+".join(correction_steps)}"',
         f"--save_src={save_src}"
@@ -169,6 +171,7 @@ def rotate_bvecs(bvecs_in, affine_in, bvecs_out):
     rotated_bvecs[:, idx] /= bvecs_norm[idx]
 
     np.savetxt(bvecs_out, rotated_bvecs, fmt='%1.6f')
+
 
 def find_phase_dir(file_path):
     name = file_path.name.casefold()
@@ -252,6 +255,7 @@ def process_subjects(sub_dir):
         if not nifti_files:
             continue
         
+        grad_dir = dwi_dir / 'gradcheck'
         dsi_process_dir = dwi_dir / 'dsi_studio'
         processed_dir = dwi_dir / 'processed'
         transform_dir = dwi_dir / 'transform'
@@ -268,11 +272,11 @@ def process_subjects(sub_dir):
         brain_mask_stem = join_ids(sub_id, ses_id, "dwi_processed_bse-multi_BrainMask")
         dwi_mni_stem = join_ids(sub_id, ses_id, "dwi_MNI")
 
-        for path in (dsi_process_dir, processed_dir, transform_dir, gqi_dir):
+        for path in (dsi_process_dir, processed_dir, transform_dir, gqi_dir, grad_dir):
             path.mkdir(parents=True, exist_ok=True)
 
         def cleanup_failure():
-            for path in (dsi_process_dir, processed_dir, transform_dir, gqi_dir):
+            for path in (dsi_process_dir, processed_dir, transform_dir, gqi_dir, grad_dir):
                 safe_rmtree(path)
         
         tagged = []
@@ -294,14 +298,29 @@ def process_subjects(sub_dir):
                 continue
             
             bval_p = p.with_suffix("").with_suffix(".bval")
+            bvec_p = p.with_suffix("").with_suffix(".bvec")
             if not bval_p.exists():
                 log_error(error_log, f"missing bval file in {dwi_dir}: {p}")
+                continue
+            
+            if not bvec_p.exists():
+                log_error(error_log, f"missing bvec file in {dwi_dir}: {p}")
                 continue
             
             try:
                 bvals = load_bvals(bval_p)
             except ValueError:
                 log_error(error_log, f"invalid bval file in {dwi_dir}: {bval_p}")
+                continue
+            
+            try:
+                bvecs = read_bvecs(bvec_p)
+                if bvecs.shape[0] == 3:
+                    bvecs = np.array(bvecs)
+                else:        
+                    bvecs = np.array(bvecs).T
+            except Exception:
+                log_error(error_log, f"invalid bvec file in {dwi_dir}: {bvec_p}")
                 continue
             
             if not has_b0(bvals):
@@ -314,8 +333,8 @@ def process_subjects(sub_dir):
                 log_error(error_log, f"failed to load nifti in {dwi_dir}: {p}")
                 continue
 
-            if len(img.shape) != 4 or img.shape[3] != len(bvals):
-                log_error(error_log, f"mismatched bvals and nifti in {dwi_dir}: {p}")
+            if len(img.shape) != 4 or img.shape[3] != len(bvals) or img.shape[3] != bvecs.shape[1]:
+                log_error(error_log, f"mismatched bvals, bvecs, and nifti dimensions in {dwi_dir}: {p}")
                 continue
             
             run_match = re.search(r"run-(\d+)", p.name)
@@ -326,19 +345,76 @@ def process_subjects(sub_dir):
                     min_pd = pd
             
             phase_files_dict.setdefault(pd, []).append(p)
+            
+        if not phase_files_dict:
+            cleanup_failure()
+            continue
+        
+        if len(phase_files_dict) > 2:
+            log_error(error_log, f"more than 2 phase encoding directions in {dwi_dir}")
+            phase_keys = list(phase_files_dict.keys())
+            for pk in phase_keys:
+                if pk != min_pd and pk != min_pd[::-1]:
+                    del phase_files_dict[pk]
+        
+        phase_files_dict_gc = {}
+        for pd, files in phase_files_dict.items():
+            new_list = []
+            for p in files:
+                bval_p = p.with_suffix("").with_suffix(".bval")
+                bvec_p = p.with_suffix("").with_suffix(".bvec")
+                
+                if not (bval_p.exists() and bvec_p.exists()):
+                    log_error(error_log, f"missing bval/bvec in {dwi_dir}: {p}")
+                    continue
+                
+                out_bvec = grad_dir / bvec_p.name
+                out_bval = grad_dir / bval_p.name
+
+                cmd = [
+                    "dwigradcheck",
+                    str(p),
+                    "-fslgrad", str(bvec_p), str(bval_p),
+                    "-export_grad_fsl", str(out_bvec), str(out_bval),
+                    "-force",
+                    "-nthread", "80",
+                ]
+                if not run_subprocess(cmd):
+                    log_error(error_log, f"dwigradcheck failed in {dwi_dir}: {p}")
+                    continue
+
+                link_p = grad_dir / p.name
+                if not link_p.exists():
+                    link_p.symlink_to(p)
+
+                new_list.append(link_p)
+            
+            if new_list:
+                phase_files_dict_gc[pd] = new_list
+                
+        phase_files_dict = phase_files_dict_gc
+        if not phase_files_dict:
+            log_error(error_log, f"no valid file after gradcheck in {dwi_dir}")
+            cleanup_failure()
+            continue
+        
+        if 'main' in phase_files_dict:
+            min_pd = 'main'
+        elif min_pd not in phase_files_dict:
+            min_pd = max(phase_files_dict, key=lambda k: len(phase_files_dict[k]))
         
         def find_direction(files, tol=50):
-            d_cout = 0
+            d_count = 0
             for f in files:
                 bval_f = f.with_suffix("").with_suffix(".bval")
                 try:
                     bvals = load_bvals(bval_f)
                 except ValueError:
-                    log_error(error_log, f"invalid bval file in {dwi_dir}: {bval_p}")
+                    log_error(error_log, f"invalid bval file in {dwi_dir}: {bval_f}")
                     continue
                 
-                d_cout += sum(1 for b in bvals if b > tol)
-            return d_cout
+                d_count += sum(1 for b in bvals if b > tol)
+            return d_count
 
         dir_count = {pd: find_direction(files) for pd, files in phase_files_dict.items()}
         
@@ -356,16 +432,12 @@ def process_subjects(sub_dir):
         if min_pd != max_dir_pd:
             min_pd = max_dir_pd
         
-        if 'main' in phase_files_dict:
-            min_pd = 'main'
-        
         if not phase_files_dict:
             cleanup_failure()
             continue
         
         if len(phase_files_dict) > 2:
-            log_error(error_log, f"more than 2 phase encoding directions in {dwi_dir}")
-            # 保留min_pd和min_pd倒置，另一个删除
+            log_error(error_log, f"more than 2 phase encoding directions in {dwi_dir} after gradcheck")
             phase_keys = list(phase_files_dict.keys())
             for pk in phase_keys:
                 if pk != min_pd and pk != min_pd[::-1]:
@@ -396,11 +468,6 @@ def process_subjects(sub_dir):
 
             preprocessed_file = processed_dir / f"{processed_stem}.nii.gz"
             preprocessed_src = preprocessed_file.with_suffix('').with_suffix('.sz')
-            if not preprocessed_file.exists():
-                rec_commands = [
-                    build_rec_cmd(sz_file, preprocessed_file, preprocessed_src, ["[Step T2][Corrections][EDDY]"]),
-                    build_rec_cmd(sz_file, preprocessed_file, preprocessed_src, ["[Step T2][Corrections][Motion Correction]"])
-                ]
             if not preprocessed_file.exists():
                 rec_commands = [
                     build_rec_cmd(sz_file, preprocessed_file, preprocessed_src, ["[Step T2][Corrections][EDDY]"]),
@@ -529,27 +596,8 @@ def process_subjects(sub_dir):
                 safe_unlink(tf)
         
         rm_mask_tmp_files(processed_dir)
-        
-        # grad check
+
         new_bvecs(preprocessed_bvec_file)
-        cmd = ['dwigradcheck', str(preprocessed_file), '-mask', str(brain_mask_file), '-fslgrad', str(preprocessed_bvec_file), str(preprocessed_bval_file), '-export_grad_fsl', str(preprocessed_bvec_file), str(preprocessed_bval_file), '-quiet', '-force']
-        if not run_subprocess(cmd):
-            log_error(error_log, f"dwigradcheck failed in {dwi_dir}")
-            cleanup_failure()
-            continue
-        
-        # generate new sz file after grad check
-        cmd = [
-                str(DSI_STUDIO_BIN),
-                "--action=src",
-                f"--source={preprocessed_file}",
-                f"--output={preprocessed_src}",
-                "--overwrite=1",
-            ]
-        if not run_subprocess(cmd):
-            log_error(error_log, f"dsi-studio src after grad check failed in {dwi_dir}")
-            cleanup_failure()
-            continue
             
         dti_dir = processed_dir / "dti"
         dti_dir.mkdir(parents=True, exist_ok=True)
