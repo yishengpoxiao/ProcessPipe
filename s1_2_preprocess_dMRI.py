@@ -3,6 +3,7 @@ import shutil
 import glob
 import subprocess
 from multiprocessing import Pool, cpu_count
+import nibabel as nib
 
 
 def convert_to_nrrd(nifti_file, bval_file, bvec_file, output_dir):
@@ -53,6 +54,8 @@ def process_subject(args):
     dwi_files = glob.glob(os.path.join(dwi_dir, "*_dwi.nii.gz"))
     
     for f in dwi_files:
+        if os.path.exists(f.replace('.nii.gz', '_gradcheck.bvec')) and os.path.exists(f.replace('.nii.gz', '_gradcheck.bval')):
+            continue
         command = [
             'dwigradcheck',
             f,
@@ -65,6 +68,12 @@ def process_subject(args):
             '-nthreads', '80'
         ]
         subprocess.run(command)
+        
+    image1 = nib.load(dwi_files[0])
+    image2 = nib.load(dwi_files[1])
+    
+    if image1.shape[:3] != image2.shape[:3]:
+        dwi_files = glob.glob(os.path.join(dwi_dir, "*PA*_dwi.nii.gz"))
 
     # dwidenoise -> dwipreprocess -> bias correction -> gradcheck -> NRRD -> CNN masking -> UKF -> WMA
     if len(dwi_files) == 1:
@@ -75,41 +84,44 @@ def process_subject(args):
         
         mif_file = os.path.join(mrtrix_temp_dir, os.path.basename(dwi_file).replace('.nii.gz', '.mif'))
         
-        command = [
-            "mrconvert",
-            dwi_file,
-            mif_file,
-            "-fslgrad",
-            dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
-            dwi_file.replace('.nii.gz', '_gradcheck.bval'),
-            "-json_import",
-            dwi_file.replace('.nii.gz', '.json'),
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(mif_file):
+            command = [
+                "mrconvert",
+                dwi_file,
+                mif_file,
+                "-fslgrad",
+                dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+                dwi_file.replace('.nii.gz', '_gradcheck.bval'),
+                "-json_import",
+                dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         # denoise
         denoised_mif = os.path.join(mrtrix_temp_dir, os.path.basename(dwi_file).replace('.nii.gz', '_den.mif'))
-        command = [
-            "dwidenoise",
-            mif_file,
-            denoised_mif,
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(denoised_mif):
+            command = [
+                "dwidenoise",
+                mif_file,
+                denoised_mif,
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         # preprocess
         preprocessed_mif = os.path.join(mrtrix_temp_dir, f"{subject}_dwi_preproc.mif")
-        command = [
-            "dwifslpreproc",
-            denoised_mif,
-            preprocessed_mif,
-            "-rpe_none",
-            "-pe_dir", "PA",
-            "-eddy_options", " --slm=linear ",
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(preprocessed_mif):
+            command = [
+                "dwifslpreproc",
+                denoised_mif,
+                preprocessed_mif,
+                "-rpe_none",
+                "-pe_dir", "PA",
+                "-eddy_options", " --slm=linear ",
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
     elif len(dwi_files) == 2:
         try:
@@ -125,74 +137,80 @@ def process_subject(args):
         PA_mif_file = os.path.join(mrtrix_temp_dir, os.path.basename(PA_dwi_file).replace('.nii.gz', '.mif'))
         AP_mif_file = os.path.join(mrtrix_temp_dir, os.path.basename(AP_dwi_file).replace('.nii.gz', '.mif'))
         
-        command = [
-            "mrconvert",
-            PA_dwi_file,
-            PA_mif_file,
-            "-fslgrad",
-            PA_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
-            PA_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
-            "-json_import",
-            PA_dwi_file.replace('.nii.gz', '.json'),
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(PA_mif_file):
+            command = [
+                "mrconvert",
+                PA_dwi_file,
+                PA_mif_file,
+                "-fslgrad",
+                PA_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+                PA_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
+                "-json_import",
+                PA_dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
-        command = [
-            "mrconvert",
-            AP_dwi_file,
-            AP_mif_file,
-            "-fslgrad",
-            AP_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
-            AP_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
-            "-json_import",
-            AP_dwi_file.replace('.nii.gz', '.json'),
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(AP_mif_file):
+            command = [
+                "mrconvert",
+                AP_dwi_file,
+                AP_mif_file,
+                "-fslgrad",
+                AP_dwi_file.replace('.nii.gz', '_gradcheck.bvec'),
+                AP_dwi_file.replace('.nii.gz', '_gradcheck.bval'),
+                "-json_import",
+                AP_dwi_file.replace('.nii.gz', '.json'),
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         # denoise
         denoised_PA_mif = os.path.join(mrtrix_temp_dir, os.path.basename(PA_dwi_file).replace('.nii.gz', '_den.mif'))
-        command = [
-            "dwidenoise",
-            PA_mif_file,
-            denoised_PA_mif,
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(denoised_PA_mif):
+            command = [
+                "dwidenoise",
+                PA_mif_file,
+                denoised_PA_mif,
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         denoised_AP_mif = os.path.join(mrtrix_temp_dir, os.path.basename(AP_dwi_file).replace('.nii.gz', '_den.mif'))
-        command = [
-            "dwidenoise",
-            AP_mif_file,
-            denoised_AP_mif,
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(denoised_AP_mif):
+            command = [
+                "dwidenoise",
+                AP_mif_file,
+                denoised_AP_mif,
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         # cat files
         cat_mif = os.path.join(mrtrix_temp_dir, f"{subject}_2pe_dwi.mif")
-        command = [
-            "mrcat",
-            denoised_PA_mif,
-            denoised_AP_mif,
-            cat_mif,
-            "-axis", "3",
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(cat_mif):
+            command = [
+                "mrcat",
+                denoised_PA_mif,
+                denoised_AP_mif,
+                cat_mif,
+                "-axis", "3",
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
         
         # preprocess
         preprocessed_mif = os.path.join(mrtrix_temp_dir, f"{subject}_dwi_preproc.mif")
-        command = [
-            "dwifslpreproc",
-            cat_mif,
-            preprocessed_mif,
-            "-rpe_header",
-            "-eddy_options", " --slm=linear ",
-            "-nthreads", "80"
-        ]
-        subprocess.run(command)
+        if not os.path.exists(preprocessed_mif):
+            command = [
+                "dwifslpreproc",
+                cat_mif,
+                preprocessed_mif,
+                "-rpe_header",
+                "-eddy_options", " --slm=linear ",
+                "-nthreads", "80"
+            ]
+            subprocess.run(command)
 
     else:
         print(f"[WARN] dwi_files != 1 or 2, skip subject: {subject_path}")
@@ -200,66 +218,74 @@ def process_subject(args):
     
     # bias correction
     biascorrected_mif = os.path.join(mrtrix_temp_dir, f"{subject}_dwi_preproc_biascorr.mif")
-    command = [
-        "dwibiascorrect",
-        "ants",
-        preprocessed_mif,
-        biascorrected_mif,
-        "-nthreads", "80"
-    ]
-    subprocess.run(command)
+    if not os.path.exists(biascorrected_mif):
+        command = [
+            "dwibiascorrect",
+            "ants",
+            preprocessed_mif,
+            biascorrected_mif,
+            "-nthreads", "80"
+        ]
+        subprocess.run(command)
     
     processed_dir = os.path.join(dwi_dir, "processed")
     os.makedirs(processed_dir, exist_ok=True)
     
     # mif -> nifti
     processed_nifti = os.path.join(processed_dir, f"{subject}_dwi_processed.nii.gz")
-    command = [
-        "mrconvert",
-        biascorrected_mif,
-        processed_nifti,
-        "-export_grad_fsl",
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
-        "-nthreads", "80"
-    ]
-    subprocess.run(command)
+    if not os.path.exists(processed_nifti):
+        command = [
+            "mrconvert",
+            biascorrected_mif,
+            processed_nifti,
+            "-export_grad_fsl",
+            os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
+            os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
+            "-nthreads", "80"
+        ]
+        subprocess.run(command)
     
     # nifti -> nrrd
-    convert_to_nrrd(
-        processed_nifti,
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
-        os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
-        processed_dir
-    )
-    
     dwi_nrrd = os.path.join(processed_dir, f"{subject}_dwi_processed.nrrd")
+    
+    if not os.path.exists(dwi_nrrd):
+        convert_to_nrrd(
+            processed_nifti,
+            os.path.join(processed_dir, f"{subject}_dwi_processed.bval"),
+            os.path.join(processed_dir, f"{subject}_dwi_processed.bvec"),
+            processed_dir
+        )
+    
     
     # CNN masking
     txt_file = os.path.join(processed_dir, f"{subject}.txt")
     with open(txt_file, 'w') as f:
         f.write(dwi_nrrd + '\n')
-    
-    command = f"""
-    export ANTSPATH=/data/software/ANTs/bin &&
-    export PATH=${{ANTSPATH}}:$PATH &&
-    /data/software/miniconda3/envs/dmri_seg/bin/python \
-        /data/software/CNN-Diffusion-MRIBrain-Segmentation-1.0/pipeline/dwi_masking.py \
-        -i {txt_file} -f {CNN_masking_model_folder}
-    """
-    subprocess.run(command, shell=True)
-    
+        
     brain_mask_nifti = os.path.join(processed_dir, f"{subject}_dwi_processed_bse-multi_BrainMask.nii.gz")
+    
+    if not os.path.exists(brain_mask_nifti):
+        command = f"""
+        export ANTSPATH=/data/software/ANTs/bin &&
+        export PATH=${{ANTSPATH}}:$PATH &&
+        /data/software/miniconda3/envs/dmri_seg/bin/python \
+            /data/software/CNN-Diffusion-MRIBrain-Segmentation-1.0/pipeline/dwi_masking.py \
+            -i {txt_file} -f {CNN_masking_model_folder}
+        """
+        subprocess.run(command, shell=True)
+    
+    
     brain_mask_nhdr = os.path.join(processed_dir, f"{subject}_dwi_processed_bse-multi_BrainMask.nhdr")
     
-    # mask -> nhdr
-    command = [
-        '/data/software/miniconda3/envs/wma/bin/python',
-        '/data/software/conversion/conversion/nhdr_write.py',
-        '--nifti', brain_mask_nifti,
-        '--nhdr', brain_mask_nhdr
-    ]
-    subprocess.run(command)
+    if not os.path.exists(brain_mask_nhdr):
+        # mask -> nhdr
+        command = [
+            '/data/software/miniconda3/envs/wma/bin/python',
+            '/data/software/conversion/conversion/nhdr_write.py',
+            '--nifti', brain_mask_nifti,
+            '--nhdr', brain_mask_nhdr
+        ]
+        subprocess.run(command)
     
     tractography_dir = os.path.join(dwi_dir, "tractography")
     os.makedirs(tractography_dir, exist_ok=True)
@@ -267,43 +293,45 @@ def process_subject(args):
     # UKF tractography
     tractography_path = os.path.join(tractography_dir, f"{subject}.vtk")
     
-    command = [
-        '/data/software/Slicer-5.2.2-linux-amd64/Slicer',
-        '--launch',
-        '/data/software/Slicer-5.2.2-linux-amd64/NA-MIC/Extensions-31382/UKFTractography/lib/Slicer-5.2/cli-modules/UKFTractography',
-        '--numThreads', '80',
-        '--numTensor', '2',
-        '--dwiFile', dwi_nrrd,
-        '--maskFile', brain_mask_nhdr,
-        '--tracts', tractography_path,
-        '--seedingThreshold', '0.1',
-        '--stoppingFA', '0.08',
-        '--stoppingThreshold', '0.06',
-        '--seedsPerVoxel', '3',
-        '--recordFA',
-        '--freeWater',
-        '--recordTrace',
-        '--recordTensors',
-        '--recordFreeWater'
-    ]
-    subprocess.run(command)
+    if not os.path.exists(tractography_path):
+        command = [
+            '/data/software/Slicer-5.2.2-linux-amd64/Slicer',
+            '--launch',
+            '/data/software/Slicer-5.2.2-linux-amd64/NA-MIC/Extensions-31382/UKFTractography/lib/Slicer-5.2/cli-modules/UKFTractography',
+            '--numThreads', '80',
+            '--numTensor', '2',
+            '--dwiFile', dwi_nrrd,
+            '--maskFile', brain_mask_nhdr,
+            '--tracts', tractography_path,
+            '--seedingThreshold', '0.1',
+            '--stoppingFA', '0.08',
+            '--stoppingThreshold', '0.06',
+            '--seedsPerVoxel', '3',
+            '--recordFA',
+            '--freeWater',
+            '--recordTrace',
+            '--recordTensors',
+            '--recordFreeWater'
+        ]
+        subprocess.run(command)
     
     wma_dir = os.path.join(dwi_dir, "WMA")
     os.makedirs(wma_dir, exist_ok=True)
     
-    # run WMA
-    command = f"""
-    . /data/software/miniconda3/etc/profile.d/conda.sh &&
-    conda activate wma &&
-    /data/software/whitematteranalysis/bin/wm_apply_ORG_atlas_to_subject.sh \
-    -i {tractography_path} \
-    -o {wma_dir} \
-    -a {ORG_atlas_folder} \
-    -s {slicer_path} \
-    -n {8} -c 2 -x 1 -d 1 \
-    -m "{fibermeasurement_module}"
-    """
-    subprocess.run(command, shell=True, executable='/bin/bash')
+    if not os.path.exists(os.path.join(wma_dir, subject, "AnatomicalTracts", "diffusion_measurements_anatomical_tracts.csv")):
+        # run WMA
+        command = f"""
+        . /data/software/miniconda3/etc/profile.d/conda.sh &&
+        conda activate wma &&
+        /data/software/whitematteranalysis/bin/wm_apply_ORG_atlas_to_subject.sh \
+        -i {tractography_path} \
+        -o {wma_dir} \
+        -a {ORG_atlas_folder} \
+        -s {slicer_path} \
+        -n {8} -c 2 -x 1 -d 1 \
+        -m "{fibermeasurement_module}"
+        """
+        subprocess.run(command, shell=True, executable='/bin/bash')
 
     print(f"[INFO] Finished processing: site={site}, subject={subject}")
 
