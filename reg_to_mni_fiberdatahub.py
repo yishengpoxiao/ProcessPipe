@@ -133,22 +133,25 @@ for repo in root_dir.iterdir():
     if not repo.is_dir():
         continue
     
-    for sub_tag in repo.iterdir():
-        if not sub_tag.is_dir():
+    for tag in repo.iterdir():
+        if not tag.is_dir():
             continue
         
-        for subj_dir in sub_tag.iterdir():
-            if not subj_dir.is_dir():
+        for sub_tag_dir in tag.iterdir():
+            if not sub_tag_dir.is_dir():
                 continue
             
-            subject_dirs.append(subj_dir)
-            
+            for subject_dir in sub_tag_dir.iterdir():
+                if not subject_dir.is_dir():
+                    continue
+                
+                subject_dirs.append(subject_dir)
             
 def pipeline(subj_dir):
     export_dti_fa(subj_dir)
     register_fa_to_mni(subj_dir)
     register_gqi_to_mni(subj_dir)
     # run_tractography(subj_dir)
-    
+
 
 tmp = Parallel(n_jobs=30)(delayed(pipeline)(subj_dir) for subj_dir in subject_dirs)
