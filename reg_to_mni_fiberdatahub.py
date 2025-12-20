@@ -68,9 +68,9 @@ def register_fa_to_mni(subj_dir):
                     "--to={}".format(refer_img),
                     "--skip_nonlinear=1",
                     "--output_mapping={}".format(mapping_file),
-                    "--output={}".format(reg_dir / (fa_file.name + ".mni.nii.gz")),
+                    "--output={}".format(reg_dir),
                 ]
-                subprocess.check_call(cmd)
+                subprocess.run(cmd)
                 
                 
 def register_gqi_to_mni(subj_dir):
@@ -93,7 +93,7 @@ def register_gqi_to_mni(subj_dir):
                     "--action=reg",
                     "--source={}".format(gqi_file),
                     "--mapping={}".format(fa_mapping_file),
-                    "--output={}".format(reg_dir / (gqi_file.name + ".mni.fz")),
+                    "--output={}".format(reg_dir),
                 ]
                 subprocess.run(cmd)
                 
@@ -105,10 +105,10 @@ def run_tractography(subj_dir):
     tractography_dir = dwi_dir / "tractography"
     tractography_dir.mkdir(parents=True, exist_ok=True)
     
-    gqi_files = transform_dir.glob("*gqi.fz.mni.fz")
+    gqi_files = transform_dir.glob("*gqi.fz.wp.fz")
     
     for gqi_file in gqi_files:
-        tract_file = tractography_dir / (gqi_file.name + ".tt.gz")
+        tract_file = tractography_dir / (gqi_file.name + ".mni.tt.gz")
         
         if not tract_file.exists():
             cmd = [
@@ -116,7 +116,7 @@ def run_tractography(subj_dir):
                 "--action=trk",
                 "--source={}".format(gqi_file),
                 "--method=0",
-                "--seed_count=1000000",
+                "--seed_count=100000",
                 "--output={}".format(tract_file),
             ]
             subprocess.run(cmd)    
@@ -154,4 +154,6 @@ def pipeline(subj_dir):
     # run_tractography(subj_dir)
 
 
-tmp = Parallel(n_jobs=30)(delayed(pipeline)(subj_dir) for subj_dir in subject_dirs)
+tmp = Parallel(n_jobs=50)(delayed(pipeline)(subj_dir) for subj_dir in subject_dirs)
+# test_dir = Path("/data/dataset/FiberDataHub/data-hcp/lifespan/hcp-ya/100206")
+# pipeline(test_dir)
