@@ -30,20 +30,24 @@ def clean_json_control_chars(json_path: pathlib.Path):
         with open(json_path, "r", encoding="utf-8", errors="ignore") as f:
             raw_content = f.read()
             
-        clean_content = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', raw_content)
+        clean_content = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', raw_content)
         
         clean_content = re.sub(
-            r'("SequenceVariant"\s*:\s*")[^"]*?"', 
-            r'\1REMOVED_GARBAGE"', 
+            r'("SequenceVariant"\s*:\s*").*?"(\s*[,}])', 
+            r'\1REMOVED_GARBAGE"\2', 
             clean_content
         )
         
         try:
             json.loads(clean_content)
         except json.JSONDecodeError as e:
-            # If it still fails, the corruption is likely structural (missing braces/quotes)
-            log_line(f"[ERROR] Structural corruption in {json_path.name}: {e}")
-            return
+            clean_content = re.sub(
+                r'("SequenceVariant"\s*:\s*").*?("(?=\s*[,}\n\r]))', 
+                r'\1REMOVED_GARBAGE"', 
+                clean_content,
+                flags=re.DOTALL
+            )
+            json.loads(clean_content)
         
         if clean_content != raw_content:
             log_line(f"[FIX] Sanitized corrupted JSON: {json_path.name}")
