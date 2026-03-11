@@ -139,7 +139,7 @@ python process_dmri.py
 
 当前仓库中未发现：
 
-- `README` 以外的项目文档
+- `README.md` 以外的项目文档
 - `requirements.txt` / `pyproject.toml` / `setup.py`
 - 自动化测试配置
 - lint 或 build 配置
