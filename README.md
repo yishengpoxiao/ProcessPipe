@@ -61,7 +61,7 @@ ProcessPipe 是一个面向脑影像数据处理的脚本集合，主要用于�
 多个脚本默认假设数据按“站点 / 受试者”层级组织，例如：
 
 ```text
-/data/private_data/ASD_Li_lab/
+/path/to/data_root/
 └── site_name/
     └── subject_id/
         ├── anat/
@@ -74,13 +74,9 @@ ProcessPipe 是一个面向脑影像数据处理的脚本集合，主要用于�
         └── subject.zip
 ```
 
-不同脚本中使用的数据根目录并不完全一致，例如：
+不同脚本中使用的数据根目录并不完全一致，有的面向站点/受试者目录，有的面向包含 `.gqi.fz` 文件的数据集目录。
 
-- `/data/private_data/ASD_Li_lab`
-- `/data04/ASD_Li_lab`
-- `/data/dataset/FiberDataHub/data-hcp/lifespan/hcp-ya/`
-
-因此运行前请先检查每个脚本顶部的 `input_dir`、参考模板路径和软件安装路径。
+因此运行前请先检查每个脚本顶部的 `input_dir`、参考模板路径和软件安装路径，并改成适合当前环境的绝对路径。
 
 ## 外部依赖
 
