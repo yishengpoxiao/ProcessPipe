@@ -74,7 +74,10 @@ ProcessPipe 是一个面向脑影像数据处理的脚本集合，主要用于�
         └── subject.zip
 ```
 
-不同脚本中使用的数据根目录并不完全一致，有的面向站点/受试者目录，有的面向包含 `.gqi.fz` 文件的数据集目录。
+不同脚本中使用的数据根目录并不完全一致：
+
+- `s0_dicom_to_nifti.py`、`s1_1_preprocess_T1w.py`、`s1_2_preprocess_dMRI.py`、`process_dmri.py` 这类脚本主要面向“站点 / 受试者”目录；
+- `run_tractography_in_mni.py` 则面向包含 `.gqi.fz` 文件的数据集目录。
 
 因此运行前请先检查每个脚本顶部的 `input_dir`、参考模板路径和软件安装路径，并改成适合当前环境的绝对路径。
 
