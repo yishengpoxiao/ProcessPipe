@@ -7,7 +7,6 @@ from typing import Sequence
 import numpy as np
 import nibabel as nib
 from nibabel.tmpdirs import InTemporaryDirectory
-from joblib import Parallel, delayed
 import argparse
 
 DSI_STUDIO_BIN = Path("/data/yijie/software/dsi-studio/dsi_studio")
@@ -233,20 +232,10 @@ def iter_session_dwi_dirs(sub_dir: Path):
     return []
 
 
-args = argparse.ArgumentParser()
-# input_dir累加列表
-args.add_argument("-i", "--input_dir", dest="input_dir", type=str, action="append", required=True, help="Input directory containing subject folders.")
-args = args.parse_args()
-
-input_dirs = [Path(p).resolve() for p in args.input_dir]
-error_log = '/data/dataset/dmri_preprocess_error.log'
-sub_dirs = []
-
-for input_dir in input_dirs:
-    sub_dirs.extend([d for d in input_dir.iterdir() if d.is_dir()])
+DEFAULT_ERROR_LOG = Path("/data/dataset/dmri_preprocess_error.log")
 
 
-def process_subjects(sub_dir):
+def process_subjects(sub_dir, error_log=DEFAULT_ERROR_LOG):
     sub_id = sub_dir.name
 
     for ses_id, dwi_dir in iter_session_dwi_dirs(sub_dir):
@@ -718,6 +707,33 @@ def process_subjects(sub_dir):
             if path.exists() and not any(path.iterdir()):
                 path.rmdir()
 
-tmp = Parallel(n_jobs=20, backend='loky')(
-    delayed(process_subjects)(sub_dir) for sub_dir in sub_dirs
-)
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Preprocess dMRI data and reconstruct GQI in MNI space.")
+    parser.add_argument(
+        "-i",
+        "--input-dir",
+        "--input_dir",
+        dest="input_dirs",
+        type=Path,
+        action="append",
+        required=True,
+        help="Input directory containing subject folders. Repeat for multiple roots.",
+    )
+    parser.add_argument("--workers", type=int, default=20)
+    parser.add_argument("--error-log", type=Path, default=DEFAULT_ERROR_LOG)
+    args = parser.parse_args(argv)
+    from joblib import Parallel, delayed
+
+    sub_dirs = [
+        sub_dir
+        for input_dir in args.input_dirs
+        for sub_dir in input_dir.resolve().iterdir()
+        if sub_dir.is_dir()
+    ]
+    Parallel(n_jobs=args.workers, backend="loky")(
+        delayed(process_subjects)(sub_dir, args.error_log) for sub_dir in sub_dirs
+    )
+
+
+if __name__ == "__main__":
+    main()
